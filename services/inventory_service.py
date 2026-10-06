@@ -26,7 +26,11 @@ def get_product(products_df, product_name):
     return product.iloc[0]
 
 
-def check_stock(products_df, product_name, quantity):
+def check_stock(
+    products_df,
+    product_name,
+    quantity
+):
 
     product = get_product(
         products_df,
@@ -51,14 +55,4 @@ def deduct_stock(
     ] -= quantity
 
     return products_df
-
-from services.inventory_service import load_products
-
-products_df = load_products()
-
-products_df = deduct_stock(
-    products_df,
-    product_name,
-    quantity_sold
-)
 
