@@ -306,7 +306,8 @@ if page == "POS":
                         subtotal,
                         tax,
                         total,
-                        item_count
+                        item_count,
+                        st.session_state.cart
                     )
 
                     # -----------------------------
