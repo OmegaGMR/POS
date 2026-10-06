@@ -1,7 +1,22 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
-import os
+
+from services.cart_service import add_to_cart
+from services.inventory_service import (
+    load_products,
+    save_products,
+    check_stock,
+    deduct_stock
+)
+from services.sales_service import (
+    load_sales,
+    save_sale
+)
+from utils.calculations import (
+    calculate_subtotal,
+    calculate_tax,
+    calculate_total
+)
 
 st.set_page_config(
     page_title="POS System",
@@ -10,37 +25,17 @@ st.set_page_config(
 )
 
 # -----------------------------
-# File Paths
-# -----------------------------
-
-PRODUCT_FILE = "data/products.csv"
-SALES_FILE = "data/sales.csv"
-
-# -----------------------------
-# Load Data
-# -----------------------------
-
-products_df = pd.read_csv(PRODUCT_FILE)
-
-if os.path.exists(SALES_FILE):
-    sales_df = pd.read_csv(SALES_FILE)
-else:
-    sales_df = pd.DataFrame(
-        columns=[
-            "Date",
-            "Subtotal",
-            "GST",
-            "Total",
-            "Items"
-        ]
-    )
-
-# -----------------------------
 # Session State
 # -----------------------------
 
 if "cart" not in st.session_state:
     st.session_state.cart = []
+
+# -----------------------------
+# Load Data
+# -----------------------------
+
+products_df = load_products()
 
 # -----------------------------
 # Navigation
@@ -67,7 +62,9 @@ if page == "POS":
 
     if available_products.empty:
 
-        st.warning("No products are currently in stock.")
+        st.warning(
+            "No products are currently in stock."
+        )
 
     else:
 
@@ -84,7 +81,7 @@ if page == "POS":
             products_df["Product"] == product
         ].iloc[0]
 
-        price = product_row["Price"]
+        price = float(product_row["Price"])
         stock = int(product_row["Stock"])
 
         with col2:
@@ -96,23 +93,26 @@ if page == "POS":
                 step=1
             )
 
-        st.write(f"Price: ${price:.2f}")
-        st.write(f"Available Stock: {stock}")
+        st.write(
+            f"Price: ${price:.2f}"
+        )
+
+        st.write(
+            f"Available Stock: {stock}"
+        )
 
         # -----------------------------
-        # Add to Cart
+        # Add To Cart
         # -----------------------------
 
         if st.button("Add to Cart"):
 
-            item = {
-                "Product": product,
-                "Quantity": quantity,
-                "Price": price,
-                "Total": price * quantity
-            }
-
-            st.session_state.cart.append(item)
+            st.session_state.cart = add_to_cart(
+                st.session_state.cart,
+                product,
+                quantity,
+                price
+            )
 
             st.success(
                 f"Added {quantity} x {product}"
@@ -140,9 +140,18 @@ if page == "POS":
             hide_index=True
         )
 
-        subtotal = cart_df["Total"].sum()
-        tax = subtotal * 0.05
-        total = subtotal + tax
+        subtotal = calculate_subtotal(
+            st.session_state.cart
+        )
+
+        tax = calculate_tax(
+            subtotal
+        )
+
+        total = calculate_total(
+            subtotal,
+            tax
+        )
 
         st.divider()
 
@@ -186,78 +195,52 @@ if page == "POS":
 
                 enough_stock = True
 
-                # Check all stock before completing sale
+                # Check stock for every cart item
                 for item in st.session_state.cart:
 
-                    product_name = item["Product"]
-                    quantity_needed = item["Quantity"]
-
-                    current_stock = products_df.loc[
-                        products_df["Product"] == product_name,
-                        "Stock"
-                    ].iloc[0]
-
-                    if quantity_needed > current_stock:
+                    if not check_stock(
+                        products_df,
+                        item["Product"],
+                        item["Quantity"]
+                    ):
 
                         enough_stock = False
 
                         st.error(
-                            f"Not enough stock for {product_name}."
+                            f"Not enough stock for "
+                            f"{item['Product']}."
                         )
 
                 if enough_stock:
 
-                    # -----------------------------
-                    # Deduct Inventory
-                    # -----------------------------
-
+                    # Deduct stock
                     for item in st.session_state.cart:
 
-                        product_name = item["Product"]
-                        quantity_sold = item["Quantity"]
+                        products_df = deduct_stock(
+                            products_df,
+                            item["Product"],
+                            item["Quantity"]
+                        )
 
-                        products_df.loc[
-                            products_df["Product"] == product_name,
-                            "Stock"
-                        ] -= quantity_sold
-
-                    products_df.to_csv(
-                        PRODUCT_FILE,
-                        index=False
+                    save_products(
+                        products_df
                     )
 
-                    # -----------------------------
-                    # Save Sale
-                    # -----------------------------
+                    # Save sale
+                    item_count = sum(
+                        item["Quantity"]
+                        for item
+                        in st.session_state.cart
+                    )
 
-                    new_sale = pd.DataFrame([
-                        {
-                            "Date": datetime.now().strftime(
-                                "%Y-%m-%d %H:%M:%S"
-                            ),
-                            "Subtotal": subtotal,
-                            "GST": tax,
-                            "Total": total,
-                            "Items": cart_df["Quantity"].sum()
-                        }
-                    ])
+                    save_sale(
+                        subtotal,
+                        tax,
+                        total,
+                        item_count
+                    )
 
-                    if os.path.exists(SALES_FILE):
-
-                        new_sale.to_csv(
-                            SALES_FILE,
-                            mode="a",
-                            header=False,
-                            index=False
-                        )
-
-                    else:
-
-                        new_sale.to_csv(
-                            SALES_FILE,
-                            index=False
-                        )
-
+                    # Clear cart
                     st.session_state.cart = []
 
                     st.success(
@@ -295,7 +278,9 @@ elif page == "Inventory":
         hide_index=True
     )
 
-    total_units = products_df["Stock"].sum()
+    total_units = products_df[
+        "Stock"
+    ].sum()
 
     inventory_value = (
         products_df["Price"]
@@ -326,7 +311,9 @@ elif page == "Sales":
 
     st.header("Sales History")
 
-    if not os.path.exists(SALES_FILE):
+    sales_df = load_sales()
+
+    if sales_df.empty:
 
         st.write(
             "No sales have been completed yet."
@@ -334,38 +321,32 @@ elif page == "Sales":
 
     else:
 
-        sales_df = pd.read_csv(SALES_FILE)
+        st.dataframe(
+            sales_df,
+            use_container_width=True,
+            hide_index=True
+        )
 
-        if sales_df.empty:
+        total_revenue = sales_df[
+            "Total"
+        ].sum()
 
-            st.write(
-                "No sales have been completed yet."
+        total_transactions = len(
+            sales_df
+        )
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+
+            st.metric(
+                "Total Revenue",
+                f"${total_revenue:.2f}"
             )
 
-        else:
+        with col2:
 
-            st.dataframe(
-                sales_df,
-                use_container_width=True,
-                hide_index=True
+            st.metric(
+                "Transactions",
+                total_transactions
             )
-
-            total_revenue = sales_df["Total"].sum()
-
-            total_transactions = len(sales_df)
-
-            col1, col2 = st.columns(2)
-
-            with col1:
-
-                st.metric(
-                    "Total Revenue",
-                    f"${total_revenue:.2f}"
-                )
-
-            with col2:
-
-                st.metric(
-                    "Transactions",
-                    total_transactions
-                )
